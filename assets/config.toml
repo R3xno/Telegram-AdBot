@@ -1,9 +1,9 @@
 [telegram]
 # Get your API ID/HASH from https://my.telegram.org/auth
 
-phone_number="+1 911"
-api_id=0000000
-api_hash="00000000000000000000000000000000"
+phone_number="+91 9630971771"
+api_id=29927826
+api_hash="c151659e2fb768bf22f36b38dd779616"
 
 [sending]
 # The send interval is how long you want to wait between sending messages.
