@@ -1,209 +1,205 @@
-import os
-import toml
-import logging
 import asyncio
+import re
+import random
+import gc
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+from telethon.errors import FloodWaitError
 
-from telethon import TelegramClient
-from telethon import functions, types, errors
+# ================= CONFIG ================= #
 
-from tabulate import tabulate
+API_ID = 21152230
+API_HASH = "183d369e906b4f350f64d94d892dcb91"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="\x1b[38;5;147m[\x1b[0m%(asctime)s\x1b[38;5;147m]\x1b[0m %(message)s",
-    datefmt="%H:%M:%S"
-)
-logging.getLogger("telethon").setLevel(level=logging.CRITICAL)
+SESSIONS = [
+    "1BVtsOMcBu3OKdsAOLDzSSqY4D642NrFACvDqks2iAocYjZqC1tXDd-hRBLswjJ64ZYKAqV5vaVCdNqeClDvx2JwNxnXOKzdKlunqYjpYTD-HHtGlARHP1M--MRLOiaTdOGIgJvt6n2VtEqR5OGsOHJLYwkfc5h6k23udF3XObbCeoz8lRXdNgvLgnHnRhetfzQW-SQQx0GM8GtnrGYqHdxyaHgUZToT--EqUGjPXU9Dibf209_ZSJhOPXkw0o-JqFprxmI0AInNKfpvGLUCQ01Yuslil5bm4scULe8JKdFf4h4bwn9nF8-PMcBIw9O9taqW7UTiC3z9R40opuPXpk9DbuCXq9JE="
+]
 
-class Telegram():
+MESSAGE_LINK = "https://t.me/c/2432662361/15698"
 
-    def __init__(self):
-        os.system("cls && title ")
-        
-        with open("assets/config.toml") as f:
-            self.config = toml.loads(f.read())
-            
-        with open("assets/groups.txt", encoding="utf-8") as f:
-            self.groups = [i.strip() for i in f]
-            
-        self.phone_number = self.config["telegram"]["phone_number"]
-        self.api_id = self.config["telegram"]["api_id"]
-        self.api_hash = self.config["telegram"]["api_hash"]
-        
+GROUPS = [
+    "https://t.me/buffestmarket/16",
+    "https://t.me/shoreline/325",
+    "https://t.me/c/2256623070/2",
+    "https://t.me/sectormarket/6",
+    "https://t.me/EscrowpIace/41",
+    "https://t.me/marketogs/127870",
+    "https://t.me/porkmarket/8",
+    "https://t.me/SectorSocial/21",
+    "https://t.me/decorated/8263",
+    "https://t.me/stockless/45",
+    "https://t.me/pluggerz/4",
+    "https://t.me/oguflips/20",
+    "https://t.me/GureMarketplace/5",
+    "https://t.me/Social_M_Marketplace/57",
+    "https://t.me/advartise/6303",
+    "https://t.me/kimsocialMP/3",
+    "https://t.me/LuxurMarket/11",
+    "https://t.me/marketunlimited/74145",
+    "https://t.me/GooMarketplace/14616",
+    "https://t.me/iinvd/120084",
+    "https://t.me/aizenmarket/19",
+    "https://t.me/crypto_forums/1",
+    "https://t.me/CreeperForum/15",
+    "https://t.me/crisgalaxymarket/324",
+    "https://t.me/RareHandle/85",
+    "https://t.me/VipexMarket/17",
+    "https://t.me/unknownmart/13",
+    "https://t.me/SocialCove/10",
+    "https://t.me/texted/3",
+    "https://t.me/securedmarts",
+    "https://t.me/mythicforum/2",
+    "https://t.me/totalsmp/21"
+]
+
+LOG_GROUP = -1002432662361
+
+FORWARD_DELAY = (90, 100)
+ROUND_DELAY = (800, 900)
+
+# ========================================== #
+
+CACHED_MSG = None
+CACHED_FILE = None
+
+
+def rand_delay(r):
+    return random.randint(*r)
+
+
+def parse_msg(link):
+    m = re.search(r"t.me/c/(\d+)/(\d+)", link)
+    if m:
+        return int(f"-100{m.group(1)}"), int(m.group(2))
+    m = re.search(r"t.me/([^/]+)/(\d+)", link)
+    return m.group(1), int(m.group(2))
+
+
+def parse_group(link):
+    m = re.search(r"t.me/c/(\d+)(?:/(\d+))?", link)
+    if m:
+        return int(f"-100{m.group(1)}"), int(m.group(2)) if m.group(2) else None
+    m = re.search(r"t.me/([^/]+)(?:/(\d+))?", link)
+    return m.group(1), int(m.group(2)) if m.group(2) else None
+
+
+class Bot:
+    def __init__(self, session):
         self.client = TelegramClient(
-            session="assets/sessions/%s" % (self.phone_number),
-            api_id=self.api_id,
-            api_hash=self.api_hash
+            StringSession(session),
+            API_ID,
+            API_HASH,
+            device_model="Android",
+            system_version="11",
+            app_version="9.0"
         )
-        
-        self.promotions_chat = None
-        self.forward_message = None
-        
-    def tablize(self, headers: list, data: list):
-        print(
-            tabulate(
-                headers=headers,
-                tabular_data=data
-            ).replace("-", "\x1b[38;5;147m-\x1b[0m")
-        )
+        self.running = False
+        self.loop_task = None
+        self.entities = []
 
-    async def connect(self):
-        await self.client.connect()
-        logging.info("Attempting to login \x1b[38;5;147m(\x1b[0m%s\x1b[38;5;147m)\x1b[0m" % (self.phone_number))
+    async def load_message(self):
+        global CACHED_MSG, CACHED_FILE
 
-        if not await self.client.is_user_authorized():
-            logging.info("Verification code required \x1b[38;5;147m(\x1b[0m%s\x1b[38;5;147m)\x1b[0m" % (self.phone_number))
-            await self.client.send_code_request(self.phone_number)
-            logging.info("Sent verification code \x1b[38;5;147m(\x1b[0m%s\x1b[38;5;147m)\x1b[0m" % (self.phone_number))
+        if CACHED_MSG:
+            return
 
-            await self.client.sign_in(self.phone_number, input("\x1b[38;5;147m[\x1b[0m?\x1b[38;5;147m]\x1b[0m Verification code\x1b[38;5;147m:\x1b[0m "))
+        chat, msg_id = parse_msg(MESSAGE_LINK)
+        msg = await self.client.get_messages(chat, ids=msg_id)
 
-        self.user = await self.client.get_me()
-        logging.info("Successfully signed into account \x1b[38;5;147m(\x1b[0m%s\x1b[38;5;147m)\x1b[0m" % (self.user.username))
+        CACHED_MSG = msg.text or ""
 
-    async def get_groups(self):
-        reply = []
-        
-        results = await self.client(functions.messages.GetDialogsRequest(
-            offset_date=None,
-            offset_id=0,
-            offset_peer=types.InputPeerEmpty(),
-            limit=200,
-            hash=0
-        ))
-        
-        for dialog in results.chats:
-            if type(dialog) == types.Channel:
-                dialog: types.Channel = dialog
-                if dialog.megagroup:
-                    reply.append(dialog)
-                            
-        return reply
+        if msg.media:
+            CACHED_FILE = msg.media  # 🔥 no re-upload
 
-    async def get_all_chats(self):
-        results = await self.client(functions.messages.GetDialogsRequest(
-            offset_date=None,
-            offset_id=0,
-            offset_peer=types.InputPeerEmpty(),
-            limit=200,
-            hash=0
-        ))        
-        return results.chats
+    async def load_entities(self):
+        self.entities = []
+        for g in GROUPS:
+            try:
+                chat, topic = parse_group(g)
+                entity = await self.client.get_entity(chat)
+                self.entities.append((entity, topic))
+            except:
+                continue
 
-    async def get_chat_messages(self):
-        results = []
-        
-        async for message in self.client.iter_messages(self.promotions_chat):
-            if message.text != None: results.append(message)
-        
-        return results
-
-    async def clean_send(self, group: types.Channel):
+    async def send(self, entity, topic):
         try:
-            await self.client.forward_messages(group, self.forward_message)
+            if CACHED_FILE:
+                await self.client.send_file(
+                    entity,
+                    CACHED_FILE,
+                    caption=CACHED_MSG,
+                    reply_to=topic
+                )
+            else:
+                await self.client.send_message(
+                    entity,
+                    CACHED_MSG,
+                    reply_to=topic
+                )
             return True
-        except errors.FloodWaitError as e:
-            logging.info("Ratelimited for \x1b[38;5;147m%s\x1b[0ms." % (e.seconds))
-            await asyncio.sleep(int(e.seconds))
-        except Exception as e:
-            return e
 
-    async def cycle(self):
-        while True:
-            groups = await self.get_groups()
-            for group in groups:
-                last_message = (await self.client.get_messages(group, limit=1))[0]
-                if last_message.from_id.user_id == self.user.id:
-                    logging.info("Skipped \x1b[38;5;147m%s\x1b[0m as our message is the latest." % (group.title))
-                    continue
-                
-                if await self.clean_send(group):
-                    logging.info("Forwarded your message to \x1b[38;5;147m%s\x1b[0m!" % (group.title))
+        except FloodWaitError as e:
+            await asyncio.sleep(e.seconds)
+        except:
+            await asyncio.sleep(2)
+
+        return False
+
+    async def loop(self):
+        await self.load_message()
+
+        while self.running:
+            ok, fail = 0, 0
+
+            for entity, topic in self.entities:
+                if not self.running:
+                    break
+
+                if await self.send(entity, topic):
+                    ok += 1
                 else:
-                    logging.info("Failed to forward your message to \x1b[38;5;147m%s\x1b[0m!" % (group.title))
-                
-                await asyncio.sleep(self.config["sending"]["send_interval"])
-                
-            await asyncio.sleep(self.config["sending"]["loop_interval"])
+                    fail += 1
 
-    async def join_groups(self):
-        seen = []
-        
-        option = input("\x1b[38;5;147m[\x1b[0m?\x1b[38;5;147m]\x1b[0m Join groups?\x1b[38;5;147m:\x1b[0m ").lower()
-        if option == "" or "n" in option: return
-        print()
-        
-        for invite in self.groups:
-            if invite in seen: continue
-            seen.append(seen)
-            
-            while True:
-                try:
-                    if "t.me" in invite: code = invite.split("t.me/")[1]
-                    else: code = invite
-                    
-                    await self.client(functions.channels.JoinChannelRequest(code))
-                    logging.info("Successfully joined \x1b[38;5;147m%s\x1b[0m!" % (invite))
-                    break
-                except errors.FloodWaitError as e:
-                    logging.info("Ratelimited for \x1b[38;5;147m%s\x1b[0ms." % (e.seconds))
-                    await asyncio.sleep(int(e.seconds))
-                except Exception:
-                    logging.info("Failed to join \x1b[38;5;147m%s\x1b[0m." % (invite))
-                    break
-            
-            await asyncio.sleep(0.8)
+                await asyncio.sleep(rand_delay(FORWARD_DELAY))
+
+            try:
+                await self.client.send_message(
+                    LOG_GROUP,
+                    f"✅ {ok} | ❌ {fail} | 📦 {len(self.entities)}"
+                )
+            except:
+                pass
+
+            gc.collect()
+
+            await asyncio.sleep(rand_delay(ROUND_DELAY))
 
     async def start(self):
-        await self.connect()
-        print()
-        await self.join_groups()
-        print()
-        
-        groups = await self.get_all_chats()
-        self.tablize(
-            headers=["ID", "Name"],
-            data=[[group.id, group.title] for group in groups]
-        )
-        print()
-        
-        logging.info("Please select the group you would like to forward the message from")
-        channel_id = int(input("\x1b[38;5;147m[\x1b[0m?\x1b[38;5;147m]\x1b[0m ID\x1b[38;5;147m:\x1b[0m "))
-        
-        for group in groups:
-            if group.id == channel_id:
-                self.promotions_chat = group
-                
-        if self.promotions_chat == None: return logging.info("Invalid chat ID selected.")
-        print()
-        
-        logging.info("Selected \x1b[38;5;147m%s\x1b[0m as your promotions chat." % (self.promotions_chat.title))
-        print()
-        
-        messages = await self.get_chat_messages()
-        self.tablize(
-            headers=["ID", "Content"],
-            data=[[message.id, message.text[:50]] for message in messages]
-        )
-        print()
-        
-        logging.info("Please select the message you would like to forward")
-        message_id = int(input("\x1b[38;5;147m[\x1b[0m?\x1b[38;5;147m]\x1b[0m ID\x1b[38;5;147m:\x1b[0m "))
-        
-        for message in messages:
-            if message.id == message_id:
-                self.forward_message = message
-                
-        if self.forward_message == None: return logging.info("Invalid message ID selected.")
-        print()
-        
-        logging.info("Selected \x1b[38;5;147m%s\x1b[0m are your message to forward." % (self.forward_message.text[:50]))        
-        groups = await self.get_groups()
-        logging.info("Sending out your message to \x1b[38;5;147m%s\x1b[0m groups!" % (len(groups)))
-        
-        print()
-        await self.cycle()
-        
+        await self.client.start()
+        me = await self.client.get_me()
+
+        await self.load_entities()  # 🔥 load once
+
+        @self.client.on(events.NewMessage(from_users=me.id))
+        async def cmd(e):
+            if e.raw_text == "/adstart":
+                if not self.running:
+                    self.running = True
+                    if not self.loop_task or self.loop_task.done():
+                        self.loop_task = asyncio.create_task(self.loop())
+                    await e.reply("🚀 Started")
+
+            elif e.raw_text == "/adstop":
+                self.running = False
+                await e.reply("🛑 Stopped")
+
+        await asyncio.Event().wait()
+
+
+async def main():
+    bots = [Bot(s) for s in SESSIONS]
+    await asyncio.gather(*[b.start() for b in bots])
+
+
 if __name__ == "__main__":
-    client = Telegram()
-    asyncio.get_event_loop().run_until_complete(client.start())
+    asyncio.run(main())
